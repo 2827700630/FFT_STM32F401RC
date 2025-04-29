@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>STM32 FFT 频谱查看器</title>
+    <style>
+        /* 页面基本样式 */
+        body {
+            font-family: sans-serif;
+            /* 使用无衬线字体 */
+            display: flex;
+            flex-direction: column;
+            /* 垂直排列元素 */
+            align-items: center;
+            /* 水平居中 */
+            padding: 20px;
+            /* 内边距 */
+        }
+
+        /* 图表容器样式 */
+        #chartContainer {
+            width: 90%;
+            /* 宽度占父容器的90% */
+            max-width: 800px;
+            /* 最大宽度800像素 */
+            margin-top: 20px;
+            /* 顶部外边距 */
+        }
+
+        /* 按钮样式 */
+        button {
+            padding: 10px 20px;
+            /* 内边距 */
+            font-size: 16px;
+            /* 字体大小 */
+            cursor: pointer;
+            /* 鼠标悬停时显示指针 */
+            margin-bottom: 10px;
+            /* 底部外边距 */
+        }
+
+        /* 状态显示样式 */
+        #status {
+            margin-top: 10px;
+            /* 顶部外边距 */
+            font-style: italic;
+            /* 斜体 */
+            color: grey;
+            /* 灰色 */
+        }
+
+        /* 控制区域样式 */
+        .controls {
+            margin-bottom: 20px;
+            padding: 15px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            display: flex;
+            gap: 15px;
+            /* 控件之间的间距 */
+            align-items: center;
+            flex-wrap: wrap;
+            /* 允许换行 */
+            width: 90%;
+            max-width: 800px;
+            justify-content: center;
+            /* 水平居中控件 */
+        }
+
+        .controls label {
+            margin-right: 5px;
+        }
+
+        .controls input[type="number"] {
+            width: 80px;
+            /* 输入框宽度 */
+            padding: 5px;
+        }
+
+        /* 单个控制组样式 */
+        .control-group {
+            display: flex;
+            align-items: center;
+            margin-right: 15px;
+            /* 组之间的右边距 */
+        }
+
+        /* 发送参数按钮样式 */
+        #sendParamsButton {
+            background-color: #4CAF50;
+            /* 绿色背景 */
+            color: white;
+            /* 白色文字 */
+            border: none;
+            padding: 8px 15px;
+            /* 调整内边距 */
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+            /* 添加过渡效果 */
+        }
+
+        #sendParamsButton:hover {
+            background-color: #45a049;
+            /* 悬停时深绿色 */
+        }
+
+        #sendParamsButton:disabled {
+            background-color: #cccccc;
+            /* 禁用时灰色 */
+            cursor: not-allowed;
+            /* 禁用时鼠标样式 */
+        }
+    </style>
+    <!-- 引入 Chart.js 库 -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+
+<body>
+    <h1>STM32 FFT 频谱查看器</h1>
+
+    <!-- 参数控制区域 -->
+    <div class="controls">
+        <div class="control-group">
+            <label for="frequency">频率(Hz):</label>
+            <input type="number" id="frequency" min="1" max="20000" step="10" value="1000">
+        </div>
+        <div class="control-group">
+            <label for="amplitude">幅度:</label>
+            <input type="number" id="amplitude" min="0.1" max="10" step="0.1" value="1.0">
+        </div>
+        <div class="control-group">
+            <label for="offset">直流偏移:</label>
+            <input type="number" id="offset" min="-5" max="5" step="0.1" value="0.0">
+        </div>
+        <button id="sendParamsButton" disabled>发送参数到STM32</button>
+    </div>
+
+    <button id="connectButton">连接串口</button>
+    <div id="status">状态: 未连接</div>
+    <div id="chartContainer">
+        <!-- 图表绘制区域 -->
+        <canvas id="fftChart"></canvas>
+    </div>
+
+    <script>
+        // 获取页面元素
+        const connectButton = document.getElementById('connectButton'); // 连接按钮
+        const statusDisplay = document.getElementById('status');       // 状态显示区域
+        const chartCanvas = document.getElementById('fftChart');       // 图表 Canvas 元素
+        const sendParamsButton = document.getElementById('sendParamsButton'); // 发送参数按钮
+        const frequencyInput = document.getElementById('frequency');   // 频率输入框
+        const amplitudeInput = document.getElementById('amplitude');   // 幅度输入框
+        const offsetInput = document.getElementById('offset');         // 直流偏移输入框
+
+        // 全局变量
+        let port;             // 用于存储串口对象
+        let reader;           // 用于存储串口读取器对象
+        let writer;           // 用于存储串口写入器对象 (新添加)
+        let keepReading = true; // 控制读取循环是否继续的标志
+        let lineBuffer = '';  // 用于缓存串口接收到的不完整行
+        let fftChart;         // Chart.js 图表实例
+        let fftData = [];     // 存储 FFT 幅度数据
+        let frequencyLabels = []; // 存储频率轴标签
+        let indexLabels = [];     // 存储索引轴标签
+
+        // --- 配置参数 (需要与 STM32 代码中的定义匹配) ---
+        const FFT_N = 1024;             // FFT 点数
+        const SAMPLING_FREQ = 48000.0;  // 采样频率 (Hz)
+        const NUM_BINS = FFT_N / 2;     // 绘制的频点数量 (FFT 结果的前半部分)
+        // --- 配置结束 ---
+
+        // 初始化 Chart.js 图表
+        function initializeChart() {
+            // 预先计算频率轴标签和索引轴标签
+            frequencyLabels = [];
+            indexLabels = []; // 初始化索引标签数组
+            const freqResolution = SAMPLING_FREQ / FFT_N; // 计算频率分辨率
+            for (let i = 0; i < NUM_BINS; i++) {
+                // 将每个频点的频率值格式化后添加到标签数组
+                frequencyLabels.push((i * freqResolution).toFixed(2));
+                // 将索引值添加到索引标签数组
+                indexLabels.push(i.toString());
+            }
+            // 初始化 FFT 数据数组，用 0 填充
+            fftData = new Array(NUM_BINS).fill(0);
+
+            const ctx = chartCanvas.getContext('2d'); // 获取 Canvas 绘图上下文
+            // 创建新的 Chart.js 图表实例
+            fftChart = new Chart(ctx, {
+                type: 'line', // 图表类型为线性图
+                data: {
+                    // 注意：这里的 labels 用于数据集与轴的对应，我们使用频率标签
+                    labels: frequencyLabels,
+                    datasets: [{
+                        label: 'FFT 幅度', // 数据集标签
+                        data: fftData,       // Y 轴数据 (幅度)
+                        borderColor: 'rgb(75, 192, 192)', // 线条颜色
+                        tension: 0.1, // 线条张力 (0.1 使线条稍微弯曲)
+                        pointRadius: 0, // 不显示数据点，使线条更平滑
+                        xAxisID: 'xFrequency' // 将此数据集关联到底部的频率轴
+                    }]
+                },
+                options: {
+                    animation: false, // 禁用动画，加快更新速度
+                    scales: {
+                        // 主 X 轴 (底部，显示频率)
+                        xFrequency: {
+                            type: 'category', // 类别轴
+                            labels: frequencyLabels, // 明确指定此轴的标签
+                            position: 'bottom', // 位于底部
+                            title: {
+                                display: true, // 显示轴标题
+                                text: '频率 (Hz)' // X 轴标题文本
+                            }
+                        },
+                        // 次 X 轴 (顶部，显示索引)
+                        xIndex: {
+                            type: 'category', // 类别轴
+                            labels: indexLabels, // 明确指定此轴的标签
+                            position: 'top', // 位于顶部
+                            title: {
+                                display: true, // 显示轴标题
+                                text: 'FFT 索引' // X 轴标题文本
+                            },
+                            grid: {
+                                drawOnChartArea: false, // 不在图表区域绘制此轴的网格线
+                            },
+                            ticks: {
+                                autoSkip: true, // 自动跳过一些标签以避免重叠
+                                maxTicksLimit: 20 // 最多显示约 20 个刻度标签
+                            }
+                        },
+                        // Y 轴 (左侧，显示幅度)
+                        y: {
+                            title: {
+                                display: true, // 显示轴标题
+                                text: '幅度' // Y 轴标题文本
+                            },
+                            beginAtZero: true // Y 轴从 0 开始
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: false // 如果只有一个数据集，则隐藏图例
+                        },
+                        tooltip: { // 配置提示框
+                            callbacks: {
+                                // 自定义提示框标题，显示频率和索引
+                                title: function (tooltipItems) {
+                                    const index = tooltipItems[0].dataIndex;
+                                    return `频率: ${frequencyLabels[index]} Hz (索引: ${indexLabels[index]})`;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // 更新 Chart.js 图表数据
+        function updateChart() {
+            if (fftChart) { // 确保图表实例已创建
+                fftChart.data.datasets[0].data = fftData; // 更新数据集的数据
+                fftChart.update(); // 重新绘制图表
+            }
+        }
+
+        // 解析从串口接收到的行数据
+        function parseLine(line) {
+            // console.log("接收到的行:", line); // 用于调试
+
+            // 检查行是否以 "FFT[" 开头，表示是有效数据
+            if (line.startsWith('FFT[')) {
+                try {
+                    // 使用正则表达式匹配 "FFT[索引]: 幅度值" 格式
+                    const parts = line.match(/FFT\[(\d+)\]:\s*([+-]?\d+(\.\d+)?)/);
+                    // 如果匹配成功 parts[1] 是索引, parts[2] 是幅度值
+                    if (parts && parts.length >= 3) {
+                        const index = parseInt(parts[1], 10);     // 解析索引为整数
+                        const magnitude = parseFloat(parts[2]); // 解析幅度值为浮点数
+
+                        // 检查索引是否在有效范围内
+                        if (index >= 0 && index < NUM_BINS) {
+                            fftData[index] = magnitude; // 将幅度值存入数据数组
+                        }
+                    }
+                } catch (e) {
+                    // 如果解析出错，在控制台打印错误信息
+                    console.error("解析行时出错:", line, e);
+                }
+            } else if (line.includes("FFT Transmission Complete")) {
+                // 当接收到传输完成标志时，更新图表
+                console.log("接收到完整的 FFT 数据，正在更新图表。");
+                updateChart();
+                statusDisplay.textContent = "状态: 已接收并绘制频谱"; // 更新状态
+            } else if (line.includes("--- FFT Magnitudes")) {
+                // 当接收到新的传输开始标志时 (可选操作)
+                console.log("新的 FFT 传输开始。");
+                // 重置数据数组，以清除旧数据
+                fftData = new Array(NUM_BINS).fill(0);
+                statusDisplay.textContent = "状态: 正在接收 FFT 数据..."; // 更新状态
+            } else if (line.startsWith("ACK_PARAM:")) {
+                // 处理 STM32 发回的参数确认信息 (可选)
+                console.log("STM32 确认参数:", line);
+                statusDisplay.textContent = "状态: STM32 已接收参数，正在处理...";
+            } else {
+                // 打印其他未识别的信息
+                console.log("串口消息:", line);
+            }
+        }
+
+
+        // 从串口循环读取数据
+        async function readLoop() {
+            // 检查端口是否有效且可读
+            if (!port || !port.readable) {
+                console.error("串口不可读。");
+                return;
+            }
+            // 创建读取器，并设置管道处理数据
+            reader = port.readable
+                .pipeThrough(new TextDecoderStream()) // 1. 将字节流解码为文本流
+                .pipeThrough(new TransformStream({    // 2. 处理文本流，按行分割
+                    transform(chunk, controller) {
+                        lineBuffer += chunk; // 将接收到的块追加到行缓冲区
+                        const lines = lineBuffer.split('\r\n'); // 按 "\r\n" 分割行
+                        lineBuffer = lines.pop(); // 保留最后可能不完整的行到缓冲区
+                        lines.forEach(line => {
+                            if (line) controller.enqueue(line); // 只处理非空行
+                        });
+                    }
+                }))
+                .getReader(); // 获取最终的读取器
+
+            try {
+                // 循环读取数据，直到 keepReading 变为 false
+                while (keepReading) {
+                    const { value, done } = await reader.read(); // 读取一行数据
+                    if (done) {
+                        // 如果读取完成 (例如端口关闭)，则跳出循环
+                        reader.releaseLock(); // 释放读取器锁
+                        break;
+                    }
+                    if (value) {
+                        // 如果读取到有效数据，则解析该行
+                        parseLine(value);
+                    }
+                }
+            } catch (error) {
+                // 如果读取过程中发生错误
+                console.error("从串口读取时出错:", error);
+                statusDisplay.textContent = `错误: ${error.message}`; // 显示错误信息
+                disconnectSerial(); // 发生错误时断开连接
+            } finally {
+                // 确保在退出循环时释放读取器锁
+                if (reader) {
+                    try {
+                        await reader.cancel(); // 取消任何挂起的读取操作
+                        reader.releaseLock(); // 释放锁
+                    } catch (cancelError) {
+                        console.error("释放读取器锁时出错:", cancelError);
+                    }
+                }
+            }
+        }
+
+        // 发送参数到 STM32
+        async function sendParameters() {
+            if (!port || !writer) { // 检查端口和写入器是否有效
+                statusDisplay.textContent = "错误: 串口未连接或写入器无效";
+                console.error("无法发送参数：串口未连接或写入器无效。");
+                return;
+            }
+
+            // 获取输入参数值
+            const frequency = parseFloat(frequencyInput.value);
+            const amplitude = parseFloat(amplitudeInput.value);
+            const offset = parseFloat(offsetInput.value);
+
+            // 简单验证参数是否为有效数字
+            if (isNaN(frequency) || isNaN(amplitude) || isNaN(offset)) {
+                alert("请输入有效的数值参数！");
+                return;
+            }
+
+            // 构造命令字符串，格式: "PARAM:频率,幅度,偏移\r\n"
+            // 使用 toFixed(3) 保留三位小数，增加精度
+            const command = `PARAM:${frequency.toFixed(3)},${amplitude.toFixed(3)},${offset.toFixed(3)}\r\n`;
+
+            try {
+                // 将命令字符串编码为 UTF-8 字节流
+                const encoder = new TextEncoder();
+                const data = encoder.encode(command);
+                // 通过串口写入器发送数据
+                await writer.write(data);
+
+                // 更新状态显示并打印日志
+                statusDisplay.textContent = `状态: 已发送参数 (F:${frequency}Hz, A:${amplitude}, O:${offset})`;
+                console.log("已发送参数命令:", command.trim()); // trim() 移除末尾换行符以便日志查看
+
+                // 清空当前 FFT 数据，准备接收新的频谱数据
+                fftData = new Array(NUM_BINS).fill(0);
+                updateChart(); // 更新图表以显示清空状态
+            } catch (error) {
+                // 如果发送过程中出错
+                console.error("发送参数时出错:", error);
+                statusDisplay.textContent = `错误: 发送参数失败 - ${error.message}`;
+                // 考虑在此处尝试断开并重新连接，或提示用户检查连接
+                // disconnectSerial();
+            }
+        }
+
+
+        // 连接到串口
+        async function connectSerial() {
+            // 检查浏览器是否支持 Web Serial API
+            if (!('serial' in navigator)) {
+                alert('错误: 您的浏览器不支持 Web Serial API。请使用最新版的 Chrome 或 Edge。');
+                return;
+            }
+
+            // 如果已经连接，则先断开
+            if (port) {
+                await disconnectSerial();
+            }
+
+            try {
+                // 请求用户选择一个串口
+                port = await navigator.serial.requestPort();
+                // 打开选定的串口 (波特率对于 USB VCP 通常不重要)
+                await port.open({ baudRate: 115200 });
+
+                // 获取写入器 (Writer)
+                if (port.writable) {
+                    writer = port.writable.getWriter();
+                } else {
+                    throw new Error("串口不可写。"); // 如果串口不可写则抛出错误
+                }
+
+                statusDisplay.textContent = '状态: 已连接'; // 更新状态显示
+                connectButton.textContent = '断开连接'; // 更改按钮文本
+                connectButton.onclick = disconnectSerial; // 更改按钮点击事件为断开连接
+
+                // 启用参数发送按钮，并绑定点击事件
+                sendParamsButton.disabled = false;
+                sendParamsButton.onclick = sendParameters;
+
+                keepReading = true; // 设置读取标志为 true
+                readLoop(); // 开始循环读取数据
+
+            } catch (err) {
+                // 如果连接过程中出错
+                statusDisplay.textContent = `连接错误: ${err.message}`; // 显示错误信息
+                console.error('打开串口时出错:', err);
+                // 清理可能已部分打开的资源
+                if (writer) { writer.releaseLock(); writer = null; }
+                if (port) { await port.close(); port = null; }
+                sendParamsButton.disabled = true; // 禁用发送按钮
+                connectButton.textContent = '连接串口';
+                connectButton.onclick = connectSerial;
+            }
+        }
+
+        // 断开串口连接
+        async function disconnectSerial() {
+            keepReading = false; // 停止读取循环
+
+            // 释放写入器
+            if (writer) {
+                try {
+                    // 等待写入器完成可能的操作，然后释放锁
+                    // await writer.close(); // 或者直接释放锁
+                    writer.releaseLock();
+                    console.log("写入器已释放。");
+                } catch (error) {
+                    console.error("释放写入器时出错:", error);
+                }
+                writer = null; // 清除写入器引用
+            }
+
+            // 取消读取器并释放锁
+            if (reader) {
+                try {
+                    await reader.cancel(); // 这将导致 readLoop 中的读取操作结束
+                    // releaseLock 在 readLoop 的 finally 块中处理
+                    console.log("读取器已取消。");
+                } catch (error) {
+                    console.error("取消读取器时出错:", error);
+                }
+                reader = null; // 清除读取器引用
+            }
+
+            // 关闭串口
+            if (port) {
+                try {
+                    await port.close(); // 关闭串口
+                    console.log("串口已关闭。");
+                } catch (err) {
+                    // 如果关闭串口时出错
+                    statusDisplay.textContent = `断开错误: ${err.message}`; // 显示错误信息
+                    console.error('关闭串口时出错:', err);
+                } finally {
+                    port = null; // 清除串口引用
+                    // 恢复 UI 状态
+                    statusDisplay.textContent = '状态: 未连接'; // 更新状态显示
+                    connectButton.textContent = '连接串口'; // 恢复按钮文本
+                    connectButton.onclick = connectSerial; // 恢复按钮点击事件为连接
+                    sendParamsButton.disabled = true; // 禁用发送按钮
+                    sendParamsButton.onclick = null; // 移除点击事件
+                }
+            } else {
+                // 如果 port 已经是 null，只需重置 UI 状态
+                statusDisplay.textContent = '状态: 未连接';
+                connectButton.textContent = '连接串口';
+                connectButton.onclick = connectSerial;
+                sendParamsButton.disabled = true;
+                sendParamsButton.onclick = null;
+            }
+            // 可选：断开连接时清除图表数据
+            // fftData = new Array(NUM_BINS).fill(0);
+            // updateChart();
+        }
+
+        // 页面加载时的初始化设置
+        connectButton.onclick = connectSerial; // 设置连接按钮的初始点击事件
+        initializeChart(); // 初始化图表
+
+    </script>
+</body>
+
+</html>

@@ -53,7 +53,9 @@ extern "C" {
 void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
-
+// 公开函数声明，供其他文件调用
+void Update_Signal_Parameters(float freq, float amp, float offset);
+void Trigger_FFT_Recalculation(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
