@@ -15,12 +15,12 @@ static uint32_t reverse_bits(uint32_t x, uint32_t bits)
     uint32_t y = 0; // 初始化结果为 0
     for (uint32_t i = 0; i < bits; i++)
     {
-        y <<= 1;    // 结果左移一位，为下一位腾出空间
-        if (x & 1)  // 检查 x 的最低位是否为 1
+        y <<= 1;   // 结果左移一位，为下一位腾出空间
+        if (x & 1) // 检查 x 的最低位是否为 1
         {
             y |= 1; // 如果是 1，则将结果的最低位置 1
         }
-        x >>= 1;    // x 右移一位，处理下一位
+        x >>= 1; // x 右移一位，处理下一位
     }
     return y; // 返回位反转后的结果
 }
@@ -78,10 +78,10 @@ void fft_radix2(complex_t *input_output, uint32_t n)
     // 从第 1 级到第 log2n 级迭代
     for (uint32_t stage = 1; stage <= log2n; stage++)
     {
-        uint32_t m = 1 << stage; // 当前级的蝶形运算分组大小 (2, 4, 8, ...)
+        uint32_t m = 1 << stage;  // 当前级的蝶形运算分组大小 (2, 4, 8, ...)
         uint32_t m_half = m >> 1; // 分组大小的一半
-        complex_t w_m; // 旋转因子 W_m (用于当前分组)
-        complex_t w;   // 当前蝶形运算的旋转因子 W_m^k
+        complex_t w_m;            // 旋转因子 W_m (用于当前分组)
+        complex_t w;              // 当前蝶形运算的旋转因子 W_m^k
 
         // 计算当前级的主旋转因子 W_m = exp(-j * 2 * pi / m)
         float angle_m = -2.0f * M_PI / m;
@@ -136,6 +136,7 @@ void fft_calculate_magnitudes(complex_t *complex_output, float *magnitudes, uint
         // 计算幅度: magnitude = sqrt(real^2 + imag^2)
         // 注意: 有时 FFT 输出需要按 N 或 sqrt(N) 进行缩放以获得实际物理幅度。
         // 这里提供的是原始幅度。如果需要，可以除以 N。
-        magnitudes[i] = sqrtf(real * real + imag * imag);
+        // magnitudes[i] = sqrtf(real * real + imag * imag);
+        magnitudes[i] = sqrtf(real * real + imag * imag) / (float)n;
     }
 }

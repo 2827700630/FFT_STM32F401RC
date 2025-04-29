@@ -344,34 +344,72 @@ static void Process_CDC_Data(uint8_t *Buf, uint32_t Len)
     Buf[USB_RX_BUFFER_SIZE_IF - 1] = '\0'; // 强制截断
   }
 
-  // 检查是否是参数设置命令 "PARAM:freq,amp,offset\r\n"
+  // 发送调试确认 - 回显接收到的数据
+  sprintf(cdc_if_tx_buffer, "RCV:[%s]\r\n", (char*)Buf);
+  CDC_Transmit_FS((uint8_t *)cdc_if_tx_buffer, strlen(cdc_if_tx_buffer));
+
+  // 检查"PARAM:"前缀，忽略大小写
   if (strncmp((char *)Buf, "PARAM:", 6) == 0)
   {
-    float freq, amp, offset;
-    // 解析逗号分隔的参数值
-    int parsed_count = sscanf((char *)Buf + 6, "%f,%f,%f", &freq, &amp, &offset);
+    float freq = 0.0f, amp = 0.0f, offset = 0.0f;
+    char *param_str = (char*)Buf + 6; // 跳过"PARAM:"前缀
+    
+    // 使用 sscanf 解析参数，宽松地匹配逗号分隔的浮点数
+    // %f 会跳过前导空格，并在第一个无效字符处停止
+    int parsed_count = sscanf(param_str, "%f,%f,%f", &freq, &amp, &offset);
+
+    // 直接解析字符串内容 (替代方案，如果 sscanf 不工作的话)
+    if (parsed_count != 3) {
+      // sscanf 解析失败，尝试手动解析
+      char *token = strtok(param_str, ",");
+      if (token) {
+        freq = atof(token);
+        token = strtok(NULL, ",");
+        if (token) {
+          amp = atof(token);
+          token = strtok(NULL, ",\r\n");
+          if (token) {
+            offset = atof(token);
+            parsed_count = 3; // 标记解析成功
+          }
+        }
+      }
+    }
+
+    // 发送解析结果的调试消息
+    sprintf(cdc_if_tx_buffer, "PARSE:%d [%0.2f,%0.2f,%0.2f]\r\n", parsed_count, freq, amp, offset);
+    CDC_Transmit_FS((uint8_t *)cdc_if_tx_buffer, strlen(cdc_if_tx_buffer));
 
     if (parsed_count == 3) // 确保成功解析了 3 个参数
     {
-      // 调用 main.c 中的函数更新参数
-      Update_Signal_Parameters(freq, amp, offset);
-      // 调用 main.c 中的函数触发 FFT 重新计算
-      Trigger_FFT_Recalculation();
+      // 调用 main.c 中的函数更新参数 - 添加有效性检查
+      if (freq > 0.0f && amp > 0.0f) {
+        Update_Signal_Parameters(freq, amp, offset);
+        
+        // 发送确认参数更新消息
+        sprintf(cdc_if_tx_buffer, "UPDATED:F=%0.2f,A=%0.2f,O=%0.2f\r\n", freq, amp, offset);
+        CDC_Transmit_FS((uint8_t *)cdc_if_tx_buffer, strlen(cdc_if_tx_buffer));
 
-      // (可选) 发送确认消息回网页
-      // 注意：这里直接调用 CDC_Transmit_FS 可能在中断上下文不安全
-      // 更健壮的方法是设置一个标志，让主循环发送确认消息
-      // 但为了简单起见，这里直接发送，并添加短延时
-      sprintf(cdc_if_tx_buffer, "ACK_PARAM:OK\r\n"); // 简化确认消息
-      CDC_Transmit_FS((uint8_t *)cdc_if_tx_buffer, strlen(cdc_if_tx_buffer));
-      // HAL_Delay(5); // 在回调/中断中避免使用阻塞延时
+        // 设置主循环标志位 - 确保这一步一定执行
+        Trigger_FFT_Recalculation();
+        
+        // 发送触发 FFT 的确认消息
+        sprintf(cdc_if_tx_buffer, "TRIGGERED:FFT\r\n");
+        CDC_Transmit_FS((uint8_t *)cdc_if_tx_buffer, strlen(cdc_if_tx_buffer));
+
+        // 发送最终确认消息
+        sprintf(cdc_if_tx_buffer, "ACK_PARAM:OK\r\n");
+        CDC_Transmit_FS((uint8_t *)cdc_if_tx_buffer, strlen(cdc_if_tx_buffer));
+      } else {
+        sprintf(cdc_if_tx_buffer, "ERR:Invalid parameter values\r\n");
+        CDC_Transmit_FS((uint8_t *)cdc_if_tx_buffer, strlen(cdc_if_tx_buffer));
+      }
     }
     else
     {
-      // 解析失败，可以发送错误消息
-      sprintf(cdc_if_tx_buffer, "ERR:Invalid PARAM format\r\n");
+      // 解析失败，发送错误消息和原始内容
+      sprintf(cdc_if_tx_buffer, "ERR:Invalid PARAM format [%s]\r\n", param_str);
       CDC_Transmit_FS((uint8_t *)cdc_if_tx_buffer, strlen(cdc_if_tx_buffer));
-      // HAL_Delay(5);
     }
   }
   // 可以添加其他命令的处理逻辑

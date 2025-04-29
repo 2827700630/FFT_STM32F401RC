@@ -386,14 +386,18 @@
                 return;
             }
 
-            // 构造命令字符串，格式: "PARAM:频率,幅度,偏移\r\n"
-            // 使用 toFixed(3) 保留三位小数，增加精度
-            const command = `PARAM:${frequency.toFixed(3)},${amplitude.toFixed(3)},${offset.toFixed(3)}\r\n`;
+            // 构造命令字符串，确保格式严格匹配
+            // 确保没有空格，使用英文逗号作为分隔符
+            const command = `PARAM:${frequency.toFixed(1)},${amplitude.toFixed(1)},${offset.toFixed(1)}\r\n`;
+            
+            console.log("准备发送命令:", command.trim());
+            statusDisplay.textContent = `状态: 正在发送参数...`;
 
             try {
                 // 将命令字符串编码为 UTF-8 字节流
                 const encoder = new TextEncoder();
                 const data = encoder.encode(command);
+                
                 // 通过串口写入器发送数据
                 await writer.write(data);
 
@@ -404,15 +408,15 @@
                 // 清空当前 FFT 数据，准备接收新的频谱数据
                 fftData = new Array(NUM_BINS).fill(0);
                 updateChart(); // 更新图表以显示清空状态
+                
+                // 添加调试信息收集
+                console.log("发送参数后监听响应...");
             } catch (error) {
                 // 如果发送过程中出错
                 console.error("发送参数时出错:", error);
                 statusDisplay.textContent = `错误: 发送参数失败 - ${error.message}`;
-                // 考虑在此处尝试断开并重新连接，或提示用户检查连接
-                // disconnectSerial();
             }
         }
-
 
         // 连接到串口
         async function connectSerial() {

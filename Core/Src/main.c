@@ -93,6 +93,10 @@ void process_usb_data(uint8_t *Buf, uint32_t Len);
  */
 void Update_Signal_Parameters(float freq, float amp, float offset)
 {
+  // 添加参数验证和调试输出
+  sprintf(usb_tx_buffer, "DEBUG-U: Params: F=%.2f, A=%.2f, O=%.2f\r\n", freq, amp, offset);
+  CDC_Transmit_FS((uint8_t *)usb_tx_buffer, strlen(usb_tx_buffer));
+  
   // 增加范围限制，防止无效值
   if (freq >= 1.0f && freq <= (SAMPLING_FREQ / 2.0f))
   {
@@ -110,7 +114,19 @@ void Update_Signal_Parameters(float freq, float amp, float offset)
  */
 void Trigger_FFT_Recalculation(void)
 {
+  // 添加调试输出，查看标志状态
+  sprintf(usb_tx_buffer, "DEBUG-T: Flag before=%d\r\n", (int)new_parameters_received);
+  CDC_Transmit_FS((uint8_t *)usb_tx_buffer, strlen(usb_tx_buffer));
+  
+  // 设置标志位
   new_parameters_received = 1;
+  
+  // 设置后再次检查并输出，确认设置成功
+  sprintf(usb_tx_buffer, "DEBUG-T: Flag after=%d\r\n", (int)new_parameters_received);
+  CDC_Transmit_FS((uint8_t *)usb_tx_buffer, strlen(usb_tx_buffer));
+  
+  // 添加一个内存屏障操作，确保标志位值立即可见（防止编译器优化）
+  __DSB(); // 数据同步屏障
 }
 
 /**
